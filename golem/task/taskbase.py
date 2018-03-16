@@ -1,12 +1,11 @@
 import abc
 import logging
 import time
-from typing import List, Tuple, Union, Type, Optional
+from typing import List, Type
 
 from apps.core.task.coretaskstate import TaskDefinition, TaskDefaults, Options
 import golem
 from golem.core.simpleserializer import CBORSerializer, DictSerializer
-from golem.docker.image import DockerImage
 from golem.network.p2p.node import Node
 from golem.task.taskstate import TaskState
 
@@ -41,7 +40,7 @@ class TaskHeader(object):
     """ Task header describe general information about task as an request and is propagated in the
         network as an offer for computing nodes
     """
-    def __init__(self,
+    def __init__(self,  # pylint: disable=too-many-arguments
                  task_id: str,
                  environment: str,  # environment.get_id()
                  task_owner: Node,
@@ -51,7 +50,7 @@ class TaskHeader(object):
                  estimated_memory=0,
                  min_version=golem.__version__,
                  max_price: int=0,
-                 signature=None):
+                 signature=None) -> None:
         """
         :param max_price: maximum price that this (requestor) node may
         pay for an hour of computation
