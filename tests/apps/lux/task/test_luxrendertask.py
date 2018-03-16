@@ -18,6 +18,7 @@ from apps.lux.task.luxrendertask import (
 )
 from apps.rendering.task.renderingtaskstate import RenderingTaskDefinition
 from golem.core.common import is_linux, get_golem_path
+from golem.network.p2p.node import Node
 from golem.resource.dirmanager import DirManager
 from golem.task.taskstate import SubtaskStatus
 from golem.testutils import PEP8MixIn, TempDirFixture
@@ -50,7 +51,7 @@ class TestLuxRenderTask(TempDirFixture, LogTestCase, PEP8MixIn):
         # td.add_to_resources()
 
         dm = DirManager(self.path)
-        lb = LuxRenderTaskBuilder("ABC", td, self.path, dm)
+        lb = LuxRenderTaskBuilder(Node(), td, dm)
         return lb.build()
 
     def test_luxtask(self):
@@ -426,7 +427,7 @@ class TestLuxRenderTaskBuilder(TempDirFixture):
         td.main_scene_file = os.path.join(self.path, 'scene.lxs')
         td.options = LuxRenderOptions()
         td.add_to_resources()
-        lb = LuxRenderTaskBuilder("ABC", td, self.path, DirManager(self.path))
+        lb = LuxRenderTaskBuilder(Node(), td, DirManager(self.path))
         return lb.build()
 
     def test_build_dictionary(self):

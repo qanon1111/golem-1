@@ -124,8 +124,7 @@ class TaskManager(TaskEventListener):
 
         definition = builder_type.build_definition(task_type, dictionary,
                                                    minimal)
-        builder = builder_type(self.node_name, definition,
-                               self.root_path, self.dir_manager)
+        builder = builder_type(self.node, definition, self.dir_manager)
 
         return Task.build_task(builder)
 

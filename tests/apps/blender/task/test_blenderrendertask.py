@@ -22,6 +22,7 @@ from apps.rendering.resources.imgrepr import load_img
 from apps.rendering.task.renderingtask import PREVIEW_Y, PREVIEW_X
 from apps.rendering.task.renderingtaskstate import (
     RenderingTaskDefinition)
+from golem.network.p2p.node import Node
 from golem.resource.dirmanager import DirManager
 from golem.task.taskbase import ResultType
 from golem.task.taskstate import SubtaskStatus, SubtaskState
@@ -53,7 +54,7 @@ class BlenderTaskInitTest(TempDirFixture, LogTestCase):
 
         def _get_blender_task(task_definition, total_tasks=6):
             return BlenderRenderTask(
-                node_name="exmaple-node-name",
+                owner=Node(node_name="exmaple-node-name"),
                 task_definition=task_definition,
                 total_tasks=total_tasks,
                 root_path=self.tempdir,
@@ -103,7 +104,7 @@ class TestBlenderFrameTask(TempDirFixture):
         task_definition.resolution = [200, 300]
         BlenderRenderTask.VERIFICATION_QUEUE._reset()
         self.bt = BlenderRenderTask(
-            node_name="example-node-name",
+            owner=Node(node_name="example-node-name"),
             task_definition=task_definition,
             total_tasks=6,
             root_path=self.tempdir,
@@ -252,7 +253,7 @@ class TestBlenderTask(TempDirFixture, LogTestCase):
         task_definition.output_format = "PNG"
         task_definition.resolution = [res_x, res_y]
         task_definition.main_scene_file = path.join(self.path, "example.blend")
-        bt = BlenderRenderTask(node_name="example-node-name",
+        bt = BlenderRenderTask(owner=Node(node_name="example-node-name"),
                                task_definition=task_definition,
                                total_tasks=total_tasks,
                                root_path=self.tempdir,
@@ -636,9 +637,8 @@ class TestBlenderRenderTaskBuilder(TempDirFixture):
         definition = RenderingTaskDefinition()
         definition.total_subtasks = 1
         definition.options = BlenderRendererOptions()
-        builder = BlenderRenderTaskBuilder(node_name="ABC",
+        builder = BlenderRenderTaskBuilder(owner=Node(),
                                            task_definition=definition,
-                                           root_path=self.tempdir,
                                            dir_manager=DirManager(self.tempdir))
         blender_task = builder.build()
         self.assertIsInstance(blender_task, BlenderRenderTask)
