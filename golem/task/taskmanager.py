@@ -1,14 +1,15 @@
-from golem_messages.message import ComputeTaskDef
 import logging
 import pickle
 import time
-
 from pathlib import Path
+
+from golem_messages.message import ComputeTaskDef
 from pydispatch import dispatcher
 
 from apps.appsmanager import AppsManager
+from apps.core.task.coretask import CoreTask
 from golem.core.common import HandleKeyError, get_timestamp_utc, \
-    timeout_to_deadline, to_unicode, update_dict
+    to_unicode, update_dict
 from golem.manager.nodestatesnapshot import LocalTaskStateSnapshot
 from golem.network.transport.tcpnetwork import SocketAddress
 from golem.resource.dirmanager import DirManager
@@ -16,10 +17,8 @@ from golem.resource.hyperdrive.resourcesmanager import \
     HyperdriveResourceManager
 from golem.task.result.resultmanager import EncryptedResultPackageManager
 from golem.task.taskbase import TaskEventListener, Task
-
 from golem.task.taskkeeper import CompTaskKeeper, compute_subtask_value
 from golem.task.taskrequestorstats import RequestorTaskStatsManager
-
 from golem.task.taskstate import TaskState, TaskStatus, SubtaskStatus, \
     SubtaskState, Operation, TaskOp, SubtaskOp, OtherOp
 
@@ -53,6 +52,12 @@ class TaskManager(TaskEventListener):
     """
     handle_task_key_error = HandleKeyError(log_task_key_error)
     handle_subtask_key_error = HandleKeyError(log_subtask_key_error)
+
+    class Error(Exception):
+        pass
+
+    class AlreadyRestartedError(Error):
+        pass
 
     def __init__(
             self, node_name, node, keys_auth, listen_address="",
@@ -114,18 +119,15 @@ class TaskManager(TaskEventListener):
         return self.root_path
 
     def create_task(self, dictionary, minimal=False):
-        # FIXME: Backward compatibility only. Remove after upgrading GUI.
-        if not isinstance(dictionary, dict):
-            return dictionary
-
         type_name = dictionary['type'].lower()
         task_type = self.task_types[type_name]
         builder_type = task_type.task_builder_type
 
         definition = builder_type.build_definition(task_type, dictionary,
                                                    minimal)
-        builder = builder_type(self.node_name, definition,
-                               self.root_path, self.dir_manager)
+        definition.task_id = CoreTask.create_task_id(self.keys_auth.public_key)
+        builder = builder_type(self.node_name, definition, self.root_path,
+                               self.dir_manager)
 
         return Task.build_task(builder)
 
@@ -582,6 +584,7 @@ class TaskManager(TaskEventListener):
                     t.get_progress(),
                     t.short_extra_data_repr(2200.0)
                 )  # FIXME in short_extra_data_repr should there be extra data
+                # Issue #2460
                 tasks_progresses[t.header.task_id] = ltss
 
         return tasks_progresses
@@ -592,9 +595,12 @@ class TaskManager(TaskEventListener):
         When restarting task, it's put in a final state 'restarted' and
         a new one is created.
         """
+        task_state = self.tasks_states[task_id]
+        if task_state.status == TaskStatus.restarted:
+            raise self.AlreadyRestartedError()
         self.dir_manager.clear_temporary(task_id)
 
-        self.tasks_states[task_id].status = TaskStatus.restarted
+        task_state.status = TaskStatus.restarted
         for ss in self.tasks_states[task_id].subtask_states.values():
             if ss.subtask_status != SubtaskStatus.failure:
                 ss.subtask_status = SubtaskStatus.restarted
@@ -811,7 +817,6 @@ class TaskManager(TaskEventListener):
         ss.computer.price = price
         ss.time_started = time.time()
         ss.deadline = ctd['deadline']
-        # TODO: read node ip address
         ss.subtask_definition = ctd['short_description']
         ss.subtask_id = ctd['subtask_id']
         ss.extra_data = ctd['extra_data']

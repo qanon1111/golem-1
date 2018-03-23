@@ -1,7 +1,7 @@
 import logging
 from os import path
 
-from typing import Set,Any
+from typing import Set, Any
 from ethereum.utils import denoms
 
 from golem.clientconfigdescriptor import ClientConfigDescriptor
@@ -14,8 +14,8 @@ from golem.ranking.helper.trust_const import \
 
 logger = logging.getLogger(__name__)
 
-MIN_DISK_SPACE = 1000 * 1024
-MIN_MEMORY_SIZE = 1000 * 1024
+MIN_DISK_SPACE = 1024 * 1024
+MIN_MEMORY_SIZE = 1024 * 1024
 MIN_CPU_CORES = 1
 
 DEFAULT_HARDWARE_PRESET_NAME = "default"
@@ -34,6 +34,7 @@ USE_IP6 = 0
 USE_UPNP = 1
 ACCEPT_TASKS = 1
 SEND_PINGS = 1
+ENABLE_TALKBACK = 0
 
 PINGS_INTERVALS = 120
 GETTING_PEERS_INTERVAL = 4.0
@@ -94,7 +95,6 @@ class AppConfig:
     @classmethod
     def load_config(cls, datadir, cfg_file_name=CONFIG_FILENAME):
 
-        # FIXME: This check is only for transition to separated datadirs.
         cfg_file = path.join(datadir, cfg_file_name)
         if cfg_file in cls.__loaded_configs:
             raise RuntimeError("Config has been loaded: {}".format(cfg_file))
@@ -103,7 +103,6 @@ class AppConfig:
         node_config = NodeConfig(
             node_name="",
             node_address="",
-            public_address="",
             eth_account="",
             use_ipv6=USE_IP6,
             use_upnp=USE_UPNP,
@@ -120,6 +119,7 @@ class AppConfig:
             # flags
             accept_tasks=ACCEPT_TASKS,
             send_pings=SEND_PINGS,
+            enable_talkback=ENABLE_TALKBACK,
             # hardware
             hardware_preset_name=CUSTOM_HARDWARE_PRESET_NAME,
             # price and trust

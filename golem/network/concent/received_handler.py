@@ -85,7 +85,14 @@ def on_force_report_computed_task_response(msg, **_):
         )
         return
 
-    raise RuntimeError("Impossible condition caused by {}".format(msg))
+    raise RuntimeError("Illegal condition caused by {}".format(msg))
+
+
+@library.register_handler(message.concents.ForceSubtaskResultsRejected)
+def on_force_subtask_results_rejected(msg):
+    # After #2349 we could reschedule ForceSubtaskResults message
+    # if reason is RequestPremature (because subtask_id would be known)
+    logger.warning("[CONCENT] %r", msg)
 
 
 class TaskServerMessageHandler():
@@ -97,6 +104,10 @@ class TaskServerMessageHandler():
     @property
     def concent_service(self):
         return self.task_server.client.concent_service
+
+    @property
+    def concent_filetransfers(self):
+        return self.task_server.client.concent_filetransfers
 
     @handler_for(message.concents.ServiceRefused)
     def on_service_refused(self, msg,
@@ -210,6 +221,35 @@ class TaskServerMessageHandler():
             'Error downloading the task result through the Concent'
         )
 
+    @handler_for(message.concents.ForceSubtaskResultsResponse)
+    def on_force_subtask_results_response(self, msg):
+        """Concent forwards verified Requestors response to ForceSubtaskResults
+        """
+        if msg.subtask_results_accepted:
+            node_id = msg.subtask_results_accepted.task_to_compute.requestor_id
+            sub_msg = msg.subtask_results_accepted
+            self.task_server.subtask_accepted(
+                subtask_id=msg.subtask_id,
+                accepted_ts=msg.subtask_results_accepted.payment_ts,
+            )
+        elif msg.subtask_results_rejected:
+            node_id = msg.subtask_results_rejected \
+                .report_computed_task \
+                .task_to_compute.requestor_id
+            sub_msg = msg.subtask_results_rejected
+            self.task_server.subtask_rejected(
+                subtask_id=msg.subtask_id,
+            )
+        else:
+            raise RuntimeError("Illegal condition caused by {}".format(msg))
+
+        history.add(
+            msg=sub_msg,
+            node_id=node_id,
+            local_role=Actor.Provider,
+            remote_role=Actor.Requestor,
+        )
+
     @handler_for(message.concents.ForceGetTaskResultRejected)
     def on_force_get_task_result_rejected(self, msg, **_):
         """
@@ -240,3 +280,33 @@ class TaskServerMessageHandler():
         )
 
     # pylint:enable=no-self-use
+
+    @handler_for(message.concents.ForceGetTaskResultUpload)
+    def on_force_get_task_result_upload(self, msg, **_):
+        """
+        Concent requests an upload from a Provider
+        """
+        logger.debug(
+            "Concent requests a results upload, subtask: %r", msg.subtask_id)
+
+        ftt = msg.file_transfer_token
+        if not ftt or not ftt.is_upload:
+            logger.warning("File Transfer Token invalid: %r", msg.subtask_id)
+            return
+
+        wtr = self.task_server.results_to_send.get(msg.subtask_id, None)
+        if not wtr:
+            logger.warning(
+                "Cannot find the subtask %r in the send queue", msg.subtask_id)
+            return
+
+        def success(response):
+            logger.debug("Concent results upload sucessful: %r, %s",
+                         msg.subtask_id, response)
+
+        def error(exc):
+            logger.warning("Concent upload failed: %r, %s",
+                           msg.subtask_id, exc)
+
+        self.concent_filetransfers.transfer(
+            wtr.result_path, ftt, success=success, error=error)

@@ -188,7 +188,7 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
             try:
                 result = CBORSerializer.loads(result)
             except Exception as err:
-                logger.error("Can't load result data {}".format(err))
+                logger.exception("Can't load result data")
                 send_verification_failure()
                 return
 
@@ -241,7 +241,7 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
         )
 
     # TODO address, port and eth_account should be in node_info
-    # (or shouldn't be here at all)
+    # (or shouldn't be here at all). Issue #2403
     def send_report_computed_task(
             self,
             task_result,
@@ -280,7 +280,7 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
             return
 
         client_options = self.task_server.get_share_options(task_result.task_id,
-                                                            self.key_id)
+                                                            self.address)
 
         report_computed_task = message.ReportComputedTask(
             subtask_id=task_result.subtask_id,
@@ -313,8 +313,10 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
         # if the Concent is not available in the context of this subtask
         # we can only assume that `ReportComputedTask` above reaches
         # the Requestor safely
+
         if not task_to_compute.concent_enabled:
             return
+
         # we're preparing the `ForceReportComputedTask` here and
         # scheduling the dispatch of that message for later
         # (with an implicit delay in the concent service's `submit` method).
@@ -323,11 +325,13 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
         # the `ReportComputedTask` sent above before the delay elapses,
         # the `ForceReportComputedTask` message to the Concent will be
         # cancelled and thus, never sent to the Concent.
+
         delayed_forcing_msg = message.ForceReportComputedTask(
             report_computed_task=report_computed_task,
             result_hash='sha1:' + task_result.package_sha1
         )
         logger.debug('[CONCENT] ForceReport: %s', delayed_forcing_msg)
+
         self.concent_service.submit_task_message(
             task_result.subtask_id,
             delayed_forcing_msg,
@@ -541,13 +545,12 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
             msg.eth_account
         )
 
-        client_options = self.task_server.get_download_options(self.key_id,
-                                                               self.address)
-
         task_id = self.task_manager.subtask2task_mapping.get(subtask_id, None)
         task = self.task_manager.tasks.get(task_id, None)
         output_dir = task.tmp_dir if hasattr(task, 'tmp_dir') else None
 
+        client_options = self.task_server.get_download_options(msg.options,
+                                                               task_id)
         logger.debug(
             "Task result hash received: %r from %r:%r (options: %r)",
             msg.multihash,
@@ -562,8 +565,8 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
 
         def on_success(extracted_pkg, *args, **kwargs):
             extra_data = extracted_pkg.to_extra_data()
-            logger.debug("Task result extracted {}"
-                         .format(extracted_pkg.__dict__))
+            logger.debug("Task result extracted %r",
+                         extracted_pkg.__dict__)
             self.result_received(extra_data)
             self.concent_service.cancel_task_message(
                 msg.subtask_id, 'ForceGetTaskResult')
@@ -618,7 +621,7 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
         resources = self.task_server.get_resources(msg.task_id)
         options = self.task_server.get_share_options(
             task_id=msg.task_id,
-            key_id=self.task_server.get_key_id()
+            address=self.address
         )
 
         self.send(message.ResourceList(
@@ -688,8 +691,7 @@ class TaskSession(BasicSafeSession, ResourceHandshakeSessionMixin):
         resource_manager = self.task_server.client.resource_server.resource_manager  # noqa
         resources = resource_manager.from_wire(msg.resources)
 
-        client_options = self.task_server.get_download_options(self.key_id,
-                                                               self.address,
+        client_options = self.task_server.get_download_options(msg.options,
                                                                self.task_id)
 
         self.task_computer.wait_for_resources(self.task_id, resources)

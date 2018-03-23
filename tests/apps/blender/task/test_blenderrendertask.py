@@ -1,3 +1,5 @@
+import uuid
+
 from golem_messages.message import ComputeTaskDef
 import os
 import unittest.mock as mock
@@ -66,27 +68,21 @@ class BlenderTaskInitTest(TempDirFixture, LogTestCase):
 
         # Compositing True, use frames, more subtasks than frames
         task_definition.options.compositing = True
-        with self.assertLogs(logger, level="WARNING") as logs:
-            bt = _get_blender_task(task_definition)
+        bt = _get_blender_task(task_definition)
         assert not bt.compositing
-        assert any("ABC" in log for log in logs.output)
-        assert any("Compositing not supported" for log in logs.output)
 
         # Compositing True, use frames, as many subtasks as frames
         bt = _get_blender_task(task_definition, 3)
-        assert bt.compositing
+        assert not bt.compositing
 
         # Compositing True, use frames, less subtasks than frames
         bt = _get_blender_task(task_definition, 1)
-        assert bt.compositing
+        assert not bt.compositing
 
         # Compositing True, use frames is False, as many subtask as frames
         task_definition.options.use_frames = False
-        with self.assertLogs(logger, level="WARNING") as logs:
-            bt = _get_blender_task(task_definition, 3)
+        bt = _get_blender_task(task_definition, 3)
         assert not bt.compositing
-        assert any("ABC" in log for log in logs.output)
-        assert any("Compositing not supported" for log in logs.output)
 
 
 class TestBlenderFrameTask(TempDirFixture):
@@ -101,6 +97,7 @@ class TestBlenderFrameTask(TempDirFixture):
         task_definition.output_file = self.temp_file_name('output')
         task_definition.output_format = 'PNG'
         task_definition.resolution = [200, 300]
+        task_definition.task_id = str(uuid.uuid4())
         BlenderRenderTask.VERIFICATION_QUEUE._reset()
         self.bt = BlenderRenderTask(
             node_name="example-node-name",
@@ -252,6 +249,7 @@ class TestBlenderTask(TempDirFixture, LogTestCase):
         task_definition.output_format = "PNG"
         task_definition.resolution = [res_x, res_y]
         task_definition.main_scene_file = path.join(self.path, "example.blend")
+        task_definition.task_id = str(uuid.uuid4())
         bt = BlenderRenderTask(node_name="example-node-name",
                                task_definition=task_definition,
                                total_tasks=total_tasks,
@@ -423,6 +421,7 @@ class TestBlenderTask(TempDirFixture, LogTestCase):
             img_x, img_y = img.get_size()
             self.assertEqual(self.bt.res_x, img_x)
             self.assertEqual(self.bt.res_y, img_y)
+            img.close()
 
     def test_put_img_together_not_exr(self):
         for output_format in ["PNG", "JPEG", "BMP"]:
@@ -444,6 +443,7 @@ class TestBlenderTask(TempDirFixture, LogTestCase):
                 self.assertTrue(path.isfile(self.bt.output_file))
                 img = Image.open(self.bt.output_file)
                 img_x, img_y = img.size
+                img.close()
                 self.assertTrue(self.bt.res_x == img_x and res_y == img_y)
 
     def test_update_frame_preview(self):
@@ -491,8 +491,10 @@ class TestBlenderTask(TempDirFixture, LogTestCase):
         bt._update_frame_preview(file1, 1, part=1, final=True)
         img = Image.open(file3)
         self.assertTrue(img.size == (300, 200))
+        img.close()
         img = Image.open(file4)
         self.assertTrue(img.size == (300, 200))
+        img.close()
 
         preview = BlenderTaskTypeInfo.get_preview(bt, single=False)
         assert isinstance(preview, dict)
@@ -541,6 +543,7 @@ class TestBlenderTask(TempDirFixture, LogTestCase):
         self.assertTrue(pixel == (0, 0, 0))
         pixel = img_task2.getpixel((0, 100))
         self.assertTrue(pixel == color)
+        img_task2.close()
 
     def test_query_extra_data(self):
         extra_data = self.bt.query_extra_data(100000, num_cores=0,
@@ -574,6 +577,7 @@ class TestBlenderTask(TempDirFixture, LogTestCase):
         preview = files[0]
         img = Image.new("RGBA", (20, 200))
         img.save(preview, "PNG")
+        img.close()
         bt._update_preview(preview, 3)
 
         preview = BlenderTaskTypeInfo.get_preview(bt, single=False)
@@ -619,6 +623,7 @@ class TestPreviewUpdater(TempDirFixture, LogTestCase):
                 img = Image.new("RGB", (res_x, chunks_sizes[i]))
                 file1 = self.temp_file_name('chunk{}.png'.format(i))
                 img.save(file1)
+                img.close()
                 pu.update_preview(file1, i)
             if int(round(res_y * scale_factor)) != PREVIEW_Y:
                 self.assertAlmostEqual(pu.perfect_match_area_y,

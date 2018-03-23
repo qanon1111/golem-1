@@ -17,12 +17,15 @@ import time
 from unittest import mock
 from threading import Thread
 
+from ethereum.utils import denoms
 from twisted.internet import reactor
 
 from golem.appconfig import AppConfig
 from golem.clientconfigdescriptor import ClientConfigDescriptor
+from golem.database import Database
 from golem.environments.environment import Environment
 from golem.resource.dirmanager import DirManager
+from golem.model import db, DB_FIELDS, DB_MODELS
 from golem.network.transport.tcpnetwork import SocketAddress
 from tests.golem.task.dummy.task import DummyTask, DummyTaskParameters
 
@@ -68,15 +71,29 @@ def create_client(datadir):
             difficulty=config_desc.key_difficulty,
         )
 
+    database = Database(
+        db, fields=DB_FIELDS, models=DB_MODELS, db_dir=datadir)
+
     with mock.patch('golem.transactions.ethereum.ethereumtransactionsystem.'
-                    'PaymentProcessor'):
+                    'PaymentProcessor') as pp:
+        _configure_mock_payment_processor(pp.return_value)
         return Client(datadir=datadir,
                       app_config=app_config,
                       config_desc=config_desc,
                       keys_auth=keys_auth,
+                      database=database,
                       use_monitor=False,
                       connect_to_known_hosts=False,
                       use_docker_manager=False)
+
+
+def _configure_mock_payment_processor(pp):
+    pp.ETH_BATCH_PAYMENT_BASE = 0.01 * denoms.ether
+    pp.ETH_PER_PAYMENT = 0.001 * denoms.ether
+    pp.gnt_balance.return_value = 5000 * denoms.ether, time.time()
+    pp.eth_balance.return_value = 300 * denoms.ether, time.time()
+    pp._eth_available.return_value = 5000 * denoms.ether
+    pp._gnt_available.return_value = 3000 * denoms.ether
 
 
 def run_requesting_node(datadir, num_subtasks=3):
@@ -99,6 +116,7 @@ def run_requesting_node(datadir, num_subtasks=3):
     from golem.core.common import config_logging
     config_logging(datadir=datadir)
     client = create_client(datadir)
+    client.are_terms_accepted = lambda: True
     client.start()
     report("Started in {:.1f} s".format(time.time() - start_time))
 
@@ -144,6 +162,7 @@ def run_computing_node(datadir, peer_address, fail_after=None):
     from golem.core.common import config_logging
     config_logging(datadir=datadir)
     client = create_client(datadir)
+    client.are_terms_accepted = lambda: True
     client.start()
     client.task_server.task_computer.support_direct_computation = True
     report("Started in {:.1f} s".format(time.time() - start_time))

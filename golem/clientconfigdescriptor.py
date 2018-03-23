@@ -22,6 +22,7 @@ class ClientConfigDescriptor(object):
         self.use_ipv6 = 0
         self.key_difficulty = 0
         self.use_upnp = 0
+        self.enable_talkback = 0
 
         self.seed_host = ""
         self.seed_port = 0
@@ -55,7 +56,6 @@ class ClientConfigDescriptor(object):
         self.eth_account = ""
         self.min_price = 0
         self.max_price = 0
-        self.public_address = ""
 
         self.accept_tasks = 1
 

@@ -79,6 +79,11 @@ slogging.SManager.getLogger = monkey_patched_getLogger
 @click.option('--geth-address', default=None, metavar="http://<host>:<port>",
               callback=argsparser.parse_http_addr,
               help="Connect with given geth node")
+@click.option('--password', default=None,
+              help="Password to unlock Golem. This flag should be mostly used "
+              "during development as it's not a safe way to provide password")
+@click.option('--generate-rpc-cert', is_flag=True, default=False,
+              help="Generate RPC certificate if they do not exist")
 @click.option('--version', '-v', is_flag=True, default=False,
               help="Show Golem version information")
 @click.option('--log-level', default=None,
@@ -90,6 +95,7 @@ slogging.SManager.getLogger = monkey_patched_getLogger
                   'DEBUG',
               ]),
               help="Change level for Golem loggers and handlers")
+@click.option('--enable-talkback', is_flag=True, default=None)
 # Python flags, needed by crossbar (package only)
 @click.option('-m', nargs=1, default=None)
 @click.option('--node', expose_value=False)
@@ -105,7 +111,8 @@ slogging.SManager.getLogger = monkey_patched_getLogger
 @click.option('--loglevel', expose_value=False)  # Crossbar specific level
 @click.option('--title', expose_value=False)
 def start(monitor, concent, datadir, node_address, rpc_address, peer, mainnet,
-          start_geth, start_geth_port, geth_address, version, log_level, m):
+          start_geth, start_geth_port, geth_address, password,
+          generate_rpc_cert, version, log_level, enable_talkback, m):
 
     freeze_support()
     delete_reactor()
@@ -121,6 +128,10 @@ def start(monitor, concent, datadir, node_address, rpc_address, peer, mainnet,
     if not mainnet:
         PROTOCOL_CONST.ID += '-testnet'
 
+    if generate_rpc_cert:
+        generate_rpc_certificate(datadir)
+        return 0
+
     # Workarounds for pyinstaller executable
     sys.modules['win32com.gen_py.os'] = None
     sys.modules['win32com.gen_py.pywintypes'] = None
@@ -130,6 +141,9 @@ def start(monitor, concent, datadir, node_address, rpc_address, peer, mainnet,
     config_desc = ClientConfigDescriptor()
     config_desc.init_from_app_config(app_config)
     config_desc = ConfigApprover(config_desc).approve()
+
+    if enable_talkback is None:
+        enable_talkback = bool(config_desc.enable_talkback)
 
     if rpc_address:
         config_desc.rpc_address = rpc_address.address
@@ -141,9 +155,12 @@ def start(monitor, concent, datadir, node_address, rpc_address, peer, mainnet,
         start_crossbar_worker(m)
     # Golem headless
     else:
-        from golem.core.common import config_logging
-        config_logging(datadir=datadir, loglevel=log_level)
         install_reactor()
+
+        from golem.core.common import config_logging
+        config_logging(datadir=datadir, loglevel=log_level,
+                       enable_talkback=enable_talkback)
+
         log_golem_version()
         log_platform_info()
         log_ethereum_chain(mainnet)
@@ -158,7 +175,9 @@ def start(monitor, concent, datadir, node_address, rpc_address, peer, mainnet,
             mainnet=mainnet,
             start_geth=start_geth,
             start_geth_port=start_geth_port,
-            geth_address=geth_address)
+            geth_address=geth_address,
+            password=password,
+        )
 
         node.start()
 
@@ -214,6 +233,19 @@ def log_platform_info():
 def log_ethereum_chain(mainnet: bool):
     chain = "mainnet" if mainnet else "rinkeby"
     logger.info("Ethereum chain: %s", chain)
+
+
+def generate_rpc_certificate(datadir: str):
+    from golem.rpc.cert import CertificateManager
+    from golem.rpc.common import CROSSBAR_DIR
+
+    cert_dir = os.path.join(datadir, CROSSBAR_DIR)
+    os.makedirs(cert_dir, exist_ok=True)
+
+    cert_manager = CertificateManager(cert_dir)
+    cert_manager.generate_if_needed()
+
+    print('RPC self-signed certificate has been created')
 
 
 if __name__ == '__main__':

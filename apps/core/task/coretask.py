@@ -1,13 +1,12 @@
 import abc
 import decimal
-
-import golem_messages.message
 import logging
 import os
 import uuid
 from enum import Enum
 from typing import Type
 
+import golem_messages.message
 from ethereum.utils import denoms
 
 from apps.core.task.coretaskstate import TaskDefinition, Options
@@ -20,7 +19,6 @@ from golem.core.simpleserializer import CBORSerializer
 from golem.docker.environment import DockerEnvironment
 from golem.network.p2p.node import Node
 from golem.resource.dirmanager import DirManager
-
 from golem.task.taskbase import Task, TaskHeader, TaskBuilder, ResultType, \
     TaskTypeInfo
 from golem.task.taskclient import TaskClient
@@ -88,7 +86,6 @@ class CoreTask(Task):
     VERIFIER_CLASS = CoreVerifier  # type: Type[CoreVerifier]
     VERIFICATION_QUEUE = VerificationQueue()
 
-    # TODO maybe @abstract @property?
     ENVIRONMENT_CLASS = None  # type: Type[Environment]
 
     handle_key_error = HandleKeyError(log_key_error)
@@ -182,6 +179,25 @@ class CoreTask(Task):
         self.tmp_dir = None
         self.max_pending_client_results = max_pending_client_results
 
+    @staticmethod
+    def create_task_id(public_key: bytes) -> str:
+        """
+        seeds top 48 bits from given public key as node in generated uuid1
+
+        :param bytes public_key: `KeysAuth.public_key`
+        :returns: string uuid1 based on timestamp and given key
+        """
+        return str(uuid.uuid1(node=int.from_bytes(public_key[:6], 'big')))
+
+    def create_subtask_id(self) -> str:
+        """
+        seeds low 48 bits from task_id as node in generated uuid1
+
+        :returns: uuid1 based on timestamp and task_id
+        """
+        task_uuid = uuid.UUID(self.header.task_id)
+        return str(uuid.uuid1(node=task_uuid.node))
+
     def is_docker_task(self):
         return len(self.docker_images or ()) > 0
 
@@ -230,7 +246,7 @@ class CoreTask(Task):
     def verification_finished(self, subtask_id, verdict, result):
         if verdict == SubtaskVerificationState.VERIFIED:
             self.accept_results(subtask_id, result['extra_data']['results'])
-        # TODO Add support for different verification states
+        # TODO Add support for different verification states. issue #2422
         else:
             self.computation_failed(subtask_id)
 
@@ -285,7 +301,7 @@ class CoreTask(Task):
 
         if SubtaskStatus.is_active(subtask_info['status']):
             # TODO Restarted tasks that were waiting for verification should
-            # cancel it.
+            # cancel it. Issue #2423
             self._mark_subtask_failed(subtask_id)
         elif subtask_info['status'] == SubtaskStatus.finished:
             self._mark_subtask_failed(subtask_id)
@@ -332,10 +348,11 @@ class CoreTask(Task):
             'progress': self.get_progress()
         }
 
-    def _new_compute_task_def(self, hash, extra_data, working_directory=".", perf_index=0):
+    def _new_compute_task_def(self, subtask_id, extra_data,
+                              working_directory=".", perf_index=0):
         ctd = golem_messages.message.ComputeTaskDef()
         ctd['task_id'] = self.header.task_id
-        ctd['subtask_id'] = hash
+        ctd['subtask_id'] = subtask_id
         ctd['extra_data'] = extra_data
         ctd['short_description'] = self.short_extra_data_repr(extra_data)
         ctd['src_code'] = self.src_code
@@ -378,7 +395,7 @@ class CoreTask(Task):
             subtask_id]['node_id']].finish()
         self.subtasks_given[subtask_id]['status'] = SubtaskStatus.downloading
 
-    # TODO why is it here and not in the Task?
+    # TODO why is it here and not in the Task? Issue #1355
     @abc.abstractmethod
     def query_extra_data_for_test_task(self) -> golem_messages.message.ComputeTaskDef:  # noqa
         pass  # Implement in derived methods
@@ -501,8 +518,6 @@ class CoreTask(Task):
         return AcceptClientVerdict.ACCEPTED
 
 
-# TODO test it
-# some of the tests are in the test_luxrendertask.py
 def accepting(query_extra_data_func):
     """
     A function decorator which wraps given function with a verification code.
@@ -543,7 +558,7 @@ def accepting(query_extra_data_func):
 class CoreTaskBuilder(TaskBuilder):
     TASK_CLASS = CoreTask
 
-    # FIXME get the root path from dir_manager
+    # FIXME get the root path from dir_manager. Issue #2449
     def __init__(self, node_name, task_definition, root_path, dir_manager):
         super(CoreTaskBuilder, self).__init__()
         self.task_definition = task_definition
@@ -569,13 +584,12 @@ class CoreTaskBuilder(TaskBuilder):
     def build_minimal_definition(cls, task_type: CoreTaskTypeInfo, dictionary):
         definition = task_type.definition()
         definition.options = task_type.options()
-        definition.task_id = dictionary.get('id', str(uuid.uuid4()))
         definition.task_type = task_type.name
         definition.resources = set(dictionary['resources'])
         definition.total_subtasks = int(dictionary['subtasks'])
         definition.main_program_file = task_type.defaults.main_program_file
 
-        # FIXME: Backward compatibility only. Remove after upgrading GUI.
+        # FIXME: Backward compatibility only. Remove after upgrading GUI. #2450
         definition.legacy = dictionary.get('legacy', False)
 
         return definition
@@ -608,7 +622,7 @@ class CoreTaskBuilder(TaskBuilder):
 
     # TODO: Backward compatibility only. The rendering tasks should
     # move to overriding their own TaskDefinitions instead of
-    # overriding `build_dictionary`
+    # overriding `build_dictionary. Issue #2424`
     @staticmethod
     def build_dictionary(definition: TaskDefinition) -> dict:
         return definition.to_dict()
@@ -617,7 +631,7 @@ class CoreTaskBuilder(TaskBuilder):
     def get_output_path(cls, dictionary, definition):
         options = dictionary['options']
 
-        # FIXME: Backward compatibility only. Remove after upgrading GUI.
+        # FIXME: Backward compatibility only. Remove after upgrading GUI. #2450
         if definition.legacy:
             return options['output_path']
 

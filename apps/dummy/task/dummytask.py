@@ -1,10 +1,9 @@
-from copy import copy
 import logging
 import os
 import random
+from copy import copy
 
 import enforce
-
 from golem_messages.message import ComputeTaskDef
 
 from apps.core.task import coretask
@@ -45,7 +44,7 @@ class DummyTask(CoreTask):
                  node_name: str,
                  task_definition: DummyTaskDefinition,
                  root_path=None,
-                 # TODO change that when TaskHeader will be updated
+                 # TODO change that when TaskHeader will be updated. Issue #80
                  owner_address="",
                  owner_port=0,
                  owner_key_id=""
@@ -64,7 +63,7 @@ class DummyTask(CoreTask):
         return "Dummytask extra_data: {}".format(extra_data)
 
     def _extra_data(self, perf_index=0.0) -> ComputeTaskDef:
-        subtask_id = self.__get_new_subtask_id()
+        subtask_id = self.create_subtask_id()
 
         sbs = self.task_definition.options.subtask_data_size
         # create subtask-specific data, 4 bits go for one hex digit
@@ -108,20 +107,12 @@ class DummyTask(CoreTask):
 
         return self.ExtraData(ctd=ctd)
 
-    # FIXME quite tricky to know that this method should be overwritten
     def accept_results(self, subtask_id, result_files):
-        # TODO maybe move it to the base method
-        if self.subtasks_given[subtask_id]["status"] == SubtaskStatus.finished:
-            raise Exception("Subtask {} already accepted".format(subtask_id))
-
         super().accept_results(subtask_id, result_files)
         self.counting_nodes[
             self.subtasks_given[subtask_id]['node_id']
         ].accept()
         self.num_tasks_received += 1
-
-    def __get_new_subtask_id(self) -> str:
-        return "{:32x}".format(random.getrandbits(128))
 
     def __get_result_file_name(self, subtask_id: str) -> str:
         return "{}{}{}".format(self.task_definition.out_file_basename,
@@ -161,9 +152,6 @@ class DummyTaskBuilder(CoreTaskBuilder):
         difficulty = opts.get("difficulty",
                               definition.options.difficulty)
 
-        # TODO uncomment that when GUI will be fixed
-        # if not isinstance(sbs, int):
-        #     raise TypeError("Subtask data size should be int")
         sbs = int(sbs)
         # difficulty comes in hex string from GUI
         if isinstance(difficulty, str):

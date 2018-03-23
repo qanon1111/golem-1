@@ -53,8 +53,10 @@ class DockerTaskThread(TaskThread):
 
     def run(self):
         if not self.image:
-            failure = JobException("None of the Docker images are available")
-            self._fail(failure)
+            try:
+                raise JobException("None of the Docker images are available")
+            except JobException as e:
+                self._fail(e)
             self._cleanup()
             return
         try:
@@ -90,12 +92,14 @@ class DockerTaskThread(TaskThread):
                 if self.mc:
                     estm_mem = self.mc.stop()
                 if exit_code == 0:
-                    # TODO: this always returns file, implement returning data
                     out_files = []
                     for root, _, files in os.walk(output_dir):
                         for name in files:
                             out_files.append(os.path.join(root, name))
-                    self.result = {"data": out_files, "result_type": ResultType.FILES}
+                    self.result = {
+                        "data": out_files,
+                        "result_type": ResultType.FILES,
+                    }
                     if self.check_mem:
                         self.result = (self.result, estm_mem)
                     self.task_computer.task_computed(self)
@@ -103,8 +107,10 @@ class DockerTaskThread(TaskThread):
                     with open(stderr_file, 'r') as f:
                         logger.warning('Task stderr:\n%s', f.read())
 
-                    msg = self._exit_code_message(exit_code)
-                    self._fail(JobException(msg))
+                    try:
+                        raise JobException(self._exit_code_message(exit_code))
+                    except JobException as e:
+                        self._fail(e)
 
         except (requests.exceptions.ReadTimeout, TimeoutException) as exc:
             if not self.use_timeout:
@@ -122,7 +128,7 @@ class DockerTaskThread(TaskThread):
             self._cleanup()
 
     def get_progress(self):
-        # TODO: make the container update some status file?
+        # TODO: make the container update some status file? Issue #56
         return 0.0
 
     def end_comp(self):

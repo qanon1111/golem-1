@@ -1,23 +1,26 @@
 import calendar
 import logging
-import sys
 import time
-import requests
 from datetime import datetime
+from typing import Dict, List, Optional
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
 
+from sortedcontainers import SortedListWithKey
 from ethereum.utils import normalize_address, denoms
 from pydispatch import dispatcher
+import requests
 
 from golem_sci.gntconverter import GNTConverter
 from golem.core.service import LoopingCallService
+from golem.core.variables import PAYMENT_DEADLINE
 from golem.model import db, Payment, PaymentStatus
 from golem.utils import encode_hex
 
 log = logging.getLogger("golem.pay")
 
 DONATE_URL_TEMPLATE = "http://188.165.227.180:4000/donate/{}"
+# We reserve 30 minutes for the payment to go through
+PAYMENT_MAX_DELAY = PAYMENT_DEADLINE - 30 * 60
 
 
 def get_timestamp() -> int:
@@ -43,10 +46,8 @@ def tETH_faucet_donate(addr):
     return True
 
 
+# pylint: disable=too-many-instance-attributes
 class PaymentProcessor(LoopingCallService):
-    # Default deadline in seconds for new payments.
-    DEFAULT_DEADLINE = 10 * 60
-
     # Minimal number of confirmations before we treat transactions as done
     REQUIRED_CONFIRMATIONS = 12
 
@@ -60,16 +61,15 @@ class PaymentProcessor(LoopingCallService):
             sci.GAS_PRICE * sci.GAS_BATCH_PAYMENT_BASE
         self._sci = sci
         self._gnt_converter = GNTConverter(sci)
-        self.__eth_balance = None  # type: Optional[int]
-        self.__gnt_balance = None  # type: Optional[int]
-        self.__gntb_balance = None  # type: Optional[int]
+        self.__eth_balance: Optional[int] = None
+        self.__gnt_balance: Optional[int] = None
+        self.__gntb_balance: Optional[int] = None
         self.__eth_reserved = 0
         self.__gntb_reserved = 0
         self._awaiting_lock = Lock()
-        self._awaiting = []  # type: List[Any] # Awaiting individual payments
-        self._inprogress = {}  # type: Dict[Any,Any] # Sent transactions.
+        self._awaiting = SortedListWithKey(key=lambda p: p.processed_ts)
+        self._inprogress: Dict[str, List[Payment]] = {}  # Sent transactions.
         self.__faucet = faucet
-        self.deadline = sys.maxsize
         self.load_from_db()
         self._last_gnt_update = None
         self._last_eth_update = None
@@ -81,7 +81,6 @@ class PaymentProcessor(LoopingCallService):
             self.__eth_balance is not None
 
     def eth_balance(self, refresh=False):
-        # FIXME: The balance must be actively monitored!
         if self.__eth_balance is None or refresh:
             balance = self._sci.get_eth_balance(self._sci.get_eth_address())
             if balance is not None:
@@ -151,7 +150,7 @@ class PaymentProcessor(LoopingCallService):
                     .where(Payment.status == PaymentStatus.awaiting):
                 self.add(awaiting_payment)
 
-    def add(self, payment, deadline=DEFAULT_DEADLINE):
+    def add(self, payment):
         if payment.status is not PaymentStatus.awaiting:
             raise RuntimeError(
                 "Invalid payment status: {}".format(payment.status))
@@ -168,9 +167,7 @@ class PaymentProcessor(LoopingCallService):
                     payment.processed_ts = ts
                     payment.save()
 
-            self._awaiting.append(payment)
-            # TODO: Optimize by checking the time once per service update.
-            self.deadline = min(self.deadline, ts + deadline)
+            self._awaiting.add(payment)
 
         self.__gntb_reserved += payment.value
         self.__eth_reserved += self.ETH_PER_PAYMENT
@@ -180,7 +177,7 @@ class PaymentProcessor(LoopingCallService):
             self.__gntb_reserved / denoms.ether))
 
         if self.__gntb_balance is not None and self.__gnt_balance is not None:
-            if self.__gntb_reserved > self.__gntb_balance:
+            if self.__gntb_reserved > self.__gntb_balance > 0:
                 if not self._gnt_converter.is_converting():
                     log.info(
                         'Will convert %f GNT to be ready for payments',
@@ -191,8 +188,7 @@ class PaymentProcessor(LoopingCallService):
     def __get_next_batch(
             self,
             payments: List[Payment],
-            closure_time: int) -> Tuple[List[Payment], List[Payment]]:
-        payments.sort(key=lambda p: p.processed_ts)
+            closure_time: int) -> int:
         gntb_balance = self.__gntb_balance
         eth_balance, _ = self.eth_balance()
         eth_balance = eth_balance - self.ETH_BATCH_PAYMENT_BASE
@@ -212,16 +208,17 @@ class PaymentProcessor(LoopingCallService):
                     .processed_ts == payments[ind].processed_ts:
                 ind -= 1
 
-        return payments[:ind], payments[ind:]
+        return ind
 
-    def sendout(self):
+    def sendout(self, acceptable_delay: int = PAYMENT_MAX_DELAY):
         with self._awaiting_lock:
             if not self._awaiting:
                 return False
 
             now = get_timestamp()
-            if self.deadline > now:
-                log.info("Next sendout in {} s".format(self.deadline - now))
+            deadline = self._awaiting[0].processed_ts + acceptable_delay
+            if deadline > now:
+                log.info("Next sendout in {} s".format(deadline - now))
                 return False
 
             if self._gnt_converter.is_converting():
@@ -230,19 +227,21 @@ class PaymentProcessor(LoopingCallService):
 
             closure_time = now - self.CLOSURE_TIME_DELAY
 
-            payments, rest = self.__get_next_batch(
+            payments_count = self.__get_next_batch(
                 self._awaiting.copy(),
-                closure_time)
-            if rest and self.__gnt_balance:
+                closure_time,
+            )
+            if payments_count < len(self._awaiting) and self.__gnt_balance:
                 log.info(
                     'Will convert %r GNT before sending out payments',
                     self.__gnt_balance / denoms.ether,
                 )
                 self._gnt_converter.convert(self.__gnt_balance)
                 return False
-            if not payments:
+            if payments_count == 0:
                 return False
-            self._awaiting = rest
+            payments = self._awaiting[:payments_count]
+            del self._awaiting[:payments_count]
 
         value = sum([p.value for p in payments])
         log.info("Batch payments value: {:.6f}".format(value / denoms.ether))
@@ -261,7 +260,7 @@ class PaymentProcessor(LoopingCallService):
             self._inprogress[tx_hash] = payments
 
         # Remove from reserved, because we monitor the pending block.
-        # TODO: Maybe we should only monitor the latest block?
+        # TODO: Maybe we should only monitor the latest block? issue #2414
         self.__gntb_reserved -= value
         self.__eth_reserved -= len(payments) * self.ETH_PER_PAYMENT
         return True
@@ -371,3 +370,7 @@ class PaymentProcessor(LoopingCallService):
             self.monitor_progress()
             self.sendout()
             self._send_balance_snapshot()
+
+    def stop(self):
+        self.sendout(0)
+        super().stop()

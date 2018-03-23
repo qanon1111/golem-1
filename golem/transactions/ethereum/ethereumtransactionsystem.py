@@ -1,6 +1,7 @@
 import logging
+from typing import List
 
-from ethereum.utils import privtoaddr
+from ethereum.utils import privtoaddr, denoms
 from eth_utils import encode_hex
 
 from golem_sci import new_sci, chains
@@ -21,9 +22,6 @@ class EthereumTransactionSystem(TransactionSystem):
         """ Create new transaction system instance for node with given id
         :param node_priv_key str: node's private key for Ethereum account(32b)
         """
-
-        # FIXME: Passing private key all around might be a security issue.
-        #        Proper account managment is needed.
 
         try:
             eth_addr = encode_hex(privtoaddr(node_priv_key))
@@ -73,3 +71,61 @@ class EthereumTransactionSystem(TransactionSystem):
         av_gnt = self.payment_processor._gnt_available()
         eth, last_eth_update = self.payment_processor.eth_balance()
         return gnt, av_gnt, eth, last_gnt_update, last_eth_update
+
+    def eth_for_batch_payment(self, num_payments):
+        return self.payment_processor.ETH_BATCH_PAYMENT_BASE + \
+            self.payment_processor.ETH_PER_PAYMENT * num_payments
+
+    def withdraw(
+            self,
+            amount: int,
+            destination: str,
+            currency: str) -> List[str]:
+        pp = self.payment_processor
+        if currency == 'ETH':
+            eth = pp._eth_available()  # pylint: disable=W0212
+            if amount > eth:
+                raise ValueError('Not enough ETH available')
+            log.info(
+                "Withdrawing %f ETH to %s",
+                amount / denoms.ether,
+                destination,
+            )
+            return [self._sci.transfer_eth(destination, amount)]
+
+        if currency == 'GNT':
+            total_gnt = pp._gnt_available()  # pylint: disable=W0212
+            if amount > total_gnt:
+                raise ValueError('Not enough GNT available')
+            gnt = self._sci.get_gnt_balance(self._sci.get_eth_address())
+            gntb = total_gnt - gnt
+
+            if gnt >= amount:
+                log.info(
+                    "Withdrawing %f GNT to %s",
+                    amount / denoms.ether,
+                    destination,
+                )
+                return [self._sci.transfer_gnt(destination, amount)]
+
+            if gntb >= amount:
+                log.info(
+                    "Withdrawing %f GNTB to %s",
+                    amount / denoms.ether,
+                    destination,
+                )
+                return [self._sci.convert_gntb_to_gnt(destination, amount)]
+
+            log.info(
+                "Withdrawing %f GNT and %f GNTB to %s",
+                gnt / denoms.ether,
+                (amount - gnt) / denoms.ether,
+                destination,
+            )
+            res = []
+            res.append(self._sci.transfer_gnt(destination, gnt))
+            amount -= gnt
+            res.append(self._sci.convert_gntb_to_gnt(destination, amount))
+            return res
+
+        raise ValueError('Unknown currency {}'.format(currency))
